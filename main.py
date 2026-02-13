@@ -1,320 +1,240 @@
-"""Escape from Epstein Island - 3D desktop puzzle game (raycasting + pygame)."""
+"""Escape from Epstein Island - desktop 2D game (Python + Pygame)."""
 
 from __future__ import annotations
 
-import argparse
-import math
 import sys
 from dataclasses import dataclass
 
 import pygame
 
-SCREEN_W, SCREEN_H = 1280, 720
-HALF_H = SCREEN_H // 2
-FOV = math.pi / 3
-HALF_FOV = FOV / 2
-RAYS = 300
-MAX_DEPTH = 20
-DELTA_ANGLE = FOV / RAYS
-SCALE = SCREEN_W // RAYS
+WIDTH, HEIGHT = 960, 640
+TILE = 48
+FPS = 60
 
-MOVE_SPEED = 0.06
-ROT_SPEED = 0.045
-PLAYER_RADIUS = 0.2
+BG = (15, 21, 38)
+WALL = (33, 47, 83)
+FLOOR = (22, 32, 56)
+PLAYER_COLOR = (122, 199, 255)
+EXIT_LOCKED = (130, 80, 80)
+EXIT_OPEN = (90, 180, 100)
+TERMINAL_COLOR = (184, 147, 255)
+TEXT = (240, 244, 255)
 
-WORLD_MAP = [
-    "############",
-    "#S...#....E#",
-    "#.##.#.##..#",
-    "#....#..T..#",
-    "#.##.##.##.#",
-    "#..T....#..#",
-    "#.####..#T.#",
-    "#......##..#",
-    "############",
+LEVEL = [
+    "####################",
+    "#S....#...........E#",
+    "#.##.#.#.######.##.#",
+    "#....#.#......#....#",
+    "#.####.######.#.##.#",
+    "#......T..#...#..T.#",
+    "#.#######.#.#####..#",
+    "#....T....#........#",
+    "####################",
 ]
 
 
 @dataclass
 class Terminal:
-    x: float
-    y: float
-    question: str
+    x: int
+    y: int
+    prompt: str
     answer: str
     solved: bool = False
 
+    @property
+    def rect(self) -> pygame.Rect:
+        return pygame.Rect(self.x * TILE + 8, self.y * TILE + 8, TILE - 16, TILE - 16)
 
-class Game3D:
-    def __init__(self, headless: bool = False, smoke_frames: int = 0) -> None:
+
+class Game:
+    def __init__(self) -> None:
         pygame.init()
-        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-        pygame.display.set_caption("Побег с острова Эпштейна — 3D")
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Побег с острова Эпштейна — 2D Desktop")
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("arial", 28)
-        self.small = pygame.font.SysFont("arial", 22)
+        self.font = pygame.font.SysFont("arial", 22)
+        self.small_font = pygame.font.SysFont("arial", 18)
 
-        self.map_w = len(WORLD_MAP[0])
-        self.map_h = len(WORLD_MAP)
         self.walls: set[tuple[int, int]] = set()
-        self.exit_pos = (1.5, 1.5)
+        self.exit_pos = (0, 0)
+        self.player = pygame.Rect(0, 0, TILE - 14, TILE - 14)
         self.terminals: list[Terminal] = []
-        self.player_x, self.player_y, self.player_a = 1.5, 1.5, 0.0
-
-        self.keys_collected = 0
-        self.win = False
-        self.message = "WASD/стрелки — идти, E — терминал, мышь — обзор"
-
+        self.keys = 0
+        self.message = "WASD/стрелки — движение, E — взаимодействие, Enter — ответ"
         self.answer_mode = False
         self.answer_text = ""
         self.active_terminal: Terminal | None = None
-
-        self.headless = headless
-        self.smoke_frames = smoke_frames
-        if not headless:
-            pygame.mouse.set_visible(False)
-            pygame.event.set_grab(True)
+        self.win = False
 
         self._parse_level()
 
     def _parse_level(self) -> None:
-        qa = [
-            ("Я нечётное число. Убери букву — стану even. Ответ?", "семь"),
-            ("Сколько будет 3*3 + 1?", "10"),
-            ("Столица Италии?", "рим"),
+        prompts = [
+            ("Я нечётное число. Убери одну букву — стану even. Ответ?", "семь"),
+            ("2+2*2 = ?", "6"),
+            ("Столица Франции?", "париж"),
         ]
-        idx = 0
-        for y, row in enumerate(WORLD_MAP):
+        i = 0
+        for y, row in enumerate(LEVEL):
             for x, cell in enumerate(row):
                 if cell == "#":
                     self.walls.add((x, y))
                 elif cell == "S":
-                    self.player_x, self.player_y = x + 0.5, y + 0.5
+                    self.player.x = x * TILE + 7
+                    self.player.y = y * TILE + 7
                 elif cell == "E":
-                    self.exit_pos = (x + 0.5, y + 0.5)
+                    self.exit_pos = (x, y)
                 elif cell == "T":
-                    q, a = qa[idx]
-                    idx += 1
-                    self.terminals.append(Terminal(x + 0.5, y + 0.5, q, a))
+                    prompt, answer = prompts[i]
+                    i += 1
+                    self.terminals.append(Terminal(x, y, prompt, answer))
 
     def run(self) -> None:
-        frame = 0
         while True:
-            dt = self.clock.tick(60)
-            self._handle_events()
+            self.clock.tick(FPS)
+            self.handle_events()
             if not self.answer_mode and not self.win:
-                self._update_player(dt)
-                self._check_exit()
-            self._draw_scene()
-            frame += 1
-            if self.headless and frame >= self.smoke_frames:
-                break
+                self.update_player()
+                self.check_exit()
+            self.draw()
 
-    def _handle_events(self) -> None:
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
+    def handle_events(self) -> None:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                pygame.quit()
-                sys.exit()
-            if self.answer_mode and ev.type == pygame.KEYDOWN:
-                self._answer_input(ev)
-            elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_e:
-                self._try_interact()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+                if self.answer_mode:
+                    self._handle_answer_input(event)
+                elif event.key == pygame.K_e:
+                    self.try_interact()
 
-        if not self.answer_mode and not self.headless:
-            mx = pygame.mouse.get_rel()[0]
-            self.player_a += mx * 0.0025
-
-    def _answer_input(self, ev: pygame.event.Event) -> None:
-        if ev.key == pygame.K_RETURN and self.active_terminal:
-            ans = self.answer_text.strip().lower()
-            if ans == self.active_terminal.answer:
+    def _handle_answer_input(self, event: pygame.event.Event) -> None:
+        if event.key == pygame.K_RETURN and self.active_terminal:
+            normalized = self.answer_text.strip().lower()
+            if normalized == self.active_terminal.answer:
                 if not self.active_terminal.solved:
                     self.active_terminal.solved = True
-                    self.keys_collected += 1
-                self.message = f"Доступ получен ({self.keys_collected}/3)"
+                    self.keys += 1
+                self.message = f"Верно! Ключ-карта получена ({self.keys}/3)."
             else:
-                self.message = "Неверный код терминала"
+                self.message = "Неверный ответ. Попробуй ещё раз позже."
             self.answer_mode = False
             self.answer_text = ""
             self.active_terminal = None
             return
-        if ev.key == pygame.K_BACKSPACE:
+        if event.key == pygame.K_BACKSPACE:
             self.answer_text = self.answer_text[:-1]
-        elif ev.unicode and ev.unicode.isprintable():
-            self.answer_text += ev.unicode
+            return
+        if event.unicode and event.unicode.isprintable():
+            self.answer_text += event.unicode
 
-    def _update_player(self, dt: int) -> None:
+    def update_player(self) -> None:
         keys = pygame.key.get_pressed()
-        sin_a = math.sin(self.player_a)
-        cos_a = math.cos(self.player_a)
+        dx = (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT])
+        dy = (keys[pygame.K_s] or keys[pygame.K_DOWN]) - (keys[pygame.K_w] or keys[pygame.K_UP])
+        speed = 4
 
-        speed = MOVE_SPEED * dt
-        dx = dy = 0.0
+        if dx:
+            self.player.x += dx * speed
+            if self.collides_wall():
+                self.player.x -= dx * speed
+        if dy:
+            self.player.y += dy * speed
+            if self.collides_wall():
+                self.player.y -= dy * speed
 
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            dx += cos_a * speed
-            dy += sin_a * speed
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            dx -= cos_a * speed
-            dy -= sin_a * speed
-        if keys[pygame.K_a]:
-            dx += sin_a * speed
-            dy -= cos_a * speed
-        if keys[pygame.K_d]:
-            dx -= sin_a * speed
-            dy += cos_a * speed
-        if keys[pygame.K_LEFT]:
-            self.player_a -= ROT_SPEED * dt
-        if keys[pygame.K_RIGHT]:
-            self.player_a += ROT_SPEED * dt
+    def collides_wall(self) -> bool:
+        points = [
+            (self.player.left // TILE, self.player.top // TILE),
+            ((self.player.right - 1) // TILE, self.player.top // TILE),
+            (self.player.left // TILE, (self.player.bottom - 1) // TILE),
+            ((self.player.right - 1) // TILE, (self.player.bottom - 1) // TILE),
+        ]
+        return any(p in self.walls for p in points)
 
-        self._move_with_collision(dx, dy)
-
-    def _move_with_collision(self, dx: float, dy: float) -> None:
-        nx = self.player_x + dx
-        ny = self.player_y + dy
-
-        if not self._is_wall(nx, self.player_y):
-            self.player_x = nx
-        if not self._is_wall(self.player_x, ny):
-            self.player_y = ny
-
-    def _is_wall(self, x: float, y: float) -> bool:
-        tx, ty = int(x), int(y)
-        return (tx, ty) in self.walls
-
-    def _try_interact(self) -> None:
-        for t in self.terminals:
-            if math.dist((self.player_x, self.player_y), (t.x, t.y)) < 1.2:
-                if t.solved:
-                    self.message = "Терминал уже взломан"
+    def try_interact(self) -> None:
+        player_tile = (self.player.centerx // TILE, self.player.centery // TILE)
+        for terminal in self.terminals:
+            if abs(terminal.x - player_tile[0]) + abs(terminal.y - player_tile[1]) <= 1:
+                if terminal.solved:
+                    self.message = "Этот терминал уже взломан."
                 else:
                     self.answer_mode = True
-                    self.active_terminal = t
-                    self.message = t.question
+                    self.active_terminal = terminal
+                    self.message = terminal.prompt
                 return
-        self.message = "Рядом нет терминала"
+        self.message = "Рядом нет терминала."
 
-    def _check_exit(self) -> None:
-        if math.dist((self.player_x, self.player_y), self.exit_pos) < 0.6:
-            if self.keys_collected >= 3:
+    def check_exit(self) -> None:
+        tile = (self.player.centerx // TILE, self.player.centery // TILE)
+        if tile == self.exit_pos:
+            if self.keys >= 3:
                 self.win = True
-                self.message = "Победа! Ты запустил катер и сбежал с острова."
+                self.message = "Победа! Ты собрал ключ-карты и покинул остров."
             else:
-                self.message = f"Выход заблокирован: {self.keys_collected}/3 ключей"
+                self.message = f"Дверь закрыта. Нужно 3 ключ-карты, сейчас: {self.keys}."
 
-    def _ray_cast(self) -> list[tuple[int, int, tuple[int, int, int]]]:
-        walls_to_draw = []
-        start_angle = self.player_a - HALF_FOV
-        for ray in range(RAYS):
-            ray_angle = start_angle + ray * DELTA_ANGLE
-            sin_a = math.sin(ray_angle)
-            cos_a = math.cos(ray_angle)
-            depth = 0.02
-            hit = False
-            while depth < MAX_DEPTH and not hit:
-                x = self.player_x + cos_a * depth
-                y = self.player_y + sin_a * depth
-                if self._is_wall(x, y):
-                    hit = True
-                    corrected = depth * math.cos(self.player_a - ray_angle)
-                    wall_h = min(int(900 / max(corrected, 0.0001)), SCREEN_H)
-                    shade = max(40, 255 - int(corrected * 28))
-                    color = (shade // 2, shade // 2 + 10, shade)
-                    walls_to_draw.append((ray * SCALE, wall_h, color))
-                depth += 0.02
-            if not hit:
-                walls_to_draw.append((ray * SCALE, 0, (0, 0, 0)))
-        return walls_to_draw
+    def draw(self) -> None:
+        self.screen.fill(BG)
+        for y, row in enumerate(LEVEL):
+            for x, cell in enumerate(row):
+                rect = pygame.Rect(x * TILE, y * TILE, TILE, TILE)
+                if cell == "#":
+                    pygame.draw.rect(self.screen, WALL, rect)
+                else:
+                    pygame.draw.rect(self.screen, FLOOR, rect)
 
-    def _draw_sprites(self) -> None:
-        objects: list[tuple[float, pygame.Rect, tuple[int, int, int]]] = []
+        for terminal in self.terminals:
+            color = (90, 180, 100) if terminal.solved else TERMINAL_COLOR
+            pygame.draw.rect(self.screen, color, terminal.rect, border_radius=8)
 
-        for t in self.terminals:
-            dx = t.x - self.player_x
-            dy = t.y - self.player_y
-            dist = math.hypot(dx, dy)
-            angle = math.atan2(dy, dx) - self.player_a
-            while angle > math.pi:
-                angle -= 2 * math.pi
-            while angle < -math.pi:
-                angle += 2 * math.pi
-            if abs(angle) < HALF_FOV + 0.25 and dist > 0.2:
-                proj = int(500 / dist)
-                sx = int((angle + HALF_FOV) / FOV * SCREEN_W)
-                rect = pygame.Rect(sx - proj // 4, HALF_H - proj // 2, proj // 2, proj)
-                color = (80, 220, 120) if t.solved else (184, 147, 255)
-                objects.append((dist, rect, color))
+        ex, ey = self.exit_pos
+        exit_rect = pygame.Rect(ex * TILE + 8, ey * TILE + 8, TILE - 16, TILE - 16)
+        pygame.draw.rect(self.screen, EXIT_OPEN if self.keys >= 3 else EXIT_LOCKED, exit_rect, border_radius=6)
 
-        dx = self.exit_pos[0] - self.player_x
-        dy = self.exit_pos[1] - self.player_y
-        dist = math.hypot(dx, dy)
-        angle = math.atan2(dy, dx) - self.player_a
-        while angle > math.pi:
-            angle -= 2 * math.pi
-        while angle < -math.pi:
-            angle += 2 * math.pi
-        if abs(angle) < HALF_FOV + 0.25 and dist > 0.2:
-            proj = int(580 / dist)
-            sx = int((angle + HALF_FOV) / FOV * SCREEN_W)
-            rect = pygame.Rect(sx - proj // 3, HALF_H - proj // 2, proj // 1.5, proj)
-            color = (100, 210, 120) if self.keys_collected >= 3 else (180, 80, 80)
-            objects.append((dist, rect, color))
+        pygame.draw.rect(self.screen, PLAYER_COLOR, self.player, border_radius=8)
 
-        for _, rect, color in sorted(objects, key=lambda x: x[0], reverse=True):
-            pygame.draw.rect(self.screen, color, rect, border_radius=8)
-
-    def _draw_scene(self) -> None:
-        self.screen.fill((12, 18, 35))
-        pygame.draw.rect(self.screen, (26, 42, 75), (0, HALF_H, SCREEN_W, HALF_H))
-
-        for x, wall_h, color in self._ray_cast():
-            if wall_h > 0:
-                pygame.draw.rect(self.screen, color, (x, HALF_H - wall_h // 2, SCALE + 1, wall_h))
-
-        self._draw_sprites()
-        self._draw_ui()
-        pygame.display.flip()
-
-    def _draw_ui(self) -> None:
-        bar_h = 112
-        pygame.draw.rect(self.screen, (8, 11, 20), (0, SCREEN_H - bar_h, SCREEN_W, bar_h))
-        self.screen.blit(self.font.render(f"Ключи: {self.keys_collected}/3", True, (230, 236, 255)), (20, SCREEN_H - 98))
-        self.screen.blit(self.small.render(self.message[:95], True, (184, 196, 234)), (20, SCREEN_H - 58))
+        ui_y = len(LEVEL) * TILE + 8
+        pygame.draw.rect(self.screen, (10, 14, 26), (0, ui_y - 6, WIDTH, HEIGHT - ui_y + 6))
+        self.screen.blit(self.font.render(f"Ключ-карты: {self.keys}/3", True, TEXT), (16, ui_y))
+        self.screen.blit(self.small_font.render(self.message[:92], True, TEXT), (16, ui_y + 34))
 
         if self.answer_mode and self.active_terminal:
-            overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 155))
-            self.screen.blit(overlay, (0, 0))
-            box = pygame.Rect(130, 190, 1020, 260)
-            pygame.draw.rect(self.screen, (21, 31, 56), box, border_radius=14)
-            pygame.draw.rect(self.screen, (122, 199, 255), box, 2, border_radius=14)
-            self.screen.blit(self.font.render("Терминал безопасности", True, (240, 244, 255)), (box.x + 24, box.y + 24))
-            self.screen.blit(self.small.render(self.active_terminal.question[:90], True, (224, 231, 255)), (box.x + 24, box.y + 86))
-            field = pygame.Rect(box.x + 24, box.y + 130, box.width - 48, 50)
-            pygame.draw.rect(self.screen, (11, 17, 32), field, border_radius=8)
-            pygame.draw.rect(self.screen, (122, 199, 255), field, 2, border_radius=8)
-            self.screen.blit(self.small.render(self.answer_text, True, (240, 244, 255)), (field.x + 12, field.y + 14))
-            self.screen.blit(self.small.render("Enter — подтвердить", True, (160, 173, 210)), (box.x + 24, box.y + 202))
-
+            self._draw_answer_modal()
         if self.win:
-            text = self.font.render("ПОБЕДА! Нажмите ESC для выхода.", True, (145, 242, 167))
-            self.screen.blit(text, (SCREEN_W // 2 - text.get_width() // 2, 24))
+            self._draw_win_overlay()
 
+        pygame.display.flip()
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--headless-smoke", type=int, default=0, help="run N frames and exit")
-    return parser.parse_args()
+    def _draw_answer_modal(self) -> None:
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+
+        box = pygame.Rect(130, 170, 700, 250)
+        pygame.draw.rect(self.screen, (22, 32, 56), box, border_radius=12)
+        pygame.draw.rect(self.screen, (122, 199, 255), box, 2, border_radius=12)
+
+        prompt = self.active_terminal.prompt if self.active_terminal else ""
+        self.screen.blit(self.font.render("Терминал безопасности", True, TEXT), (box.x + 20, box.y + 18))
+        self.screen.blit(self.small_font.render(prompt[:80], True, TEXT), (box.x + 20, box.y + 64))
+
+        input_rect = pygame.Rect(box.x + 20, box.y + 112, box.width - 40, 44)
+        pygame.draw.rect(self.screen, (9, 15, 30), input_rect, border_radius=8)
+        pygame.draw.rect(self.screen, (122, 199, 255), input_rect, 2, border_radius=8)
+        self.screen.blit(self.font.render(self.answer_text, True, TEXT), (input_rect.x + 10, input_rect.y + 10))
+
+        hint = "Введите ответ и нажмите Enter"
+        self.screen.blit(self.small_font.render(hint, True, (176, 184, 216)), (box.x + 20, box.y + 170))
+
+    def _draw_win_overlay(self) -> None:
+        text = self.font.render("Побег выполнен! Нажми Esc для выхода.", True, (145, 242, 167))
+        self.screen.blit(text, (WIDTH // 2 - text.get_width() // 2, 18))
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    headless = args.headless_smoke > 0
-    if headless:
-        import os
-
-        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    Game3D(headless=headless, smoke_frames=args.headless_smoke).run()
+    Game().run()
