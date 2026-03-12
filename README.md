@@ -34,11 +34,7 @@ python3 main.py
 
 ## Запуск (Windows PowerShell)
 ```powershell
-# Python 3.14+
-py -m pip install pygame-ce
-# Python <=3.13
 py -m pip install pygame
-
 py main.py
 ```
 
