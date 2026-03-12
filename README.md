@@ -18,13 +18,37 @@
 - `Enter` — подтвердить ответ
 - `Esc` — выход из игры
 
-## Запуск
+## Запуск (Linux / macOS)
 ```bash
 python3 -m pip install pygame
 python3 main.py
 ```
 
+## Запуск (Windows PowerShell)
+```powershell
+py -m pip install pygame
+py main.py
+```
+
+## Запуск (Windows CMD)
+```bat
+py -m pip install pygame
+py main.py
+```
+
+## Скрипты быстрого запуска
+- Linux/macOS: `./start_game.sh`
+- Windows: `start_game.bat`
+
 ## Быстрая проверка без окна (CI/smoke)
+Кроссплатформенно (без ручной настройки `SDL_VIDEODRIVER`):
+
 ```bash
-SDL_VIDEODRIVER=dummy python3 main.py --headless-smoke 3
+python3 main.py --headless-smoke 3
+```
+
+Для Windows:
+
+```powershell
+py main.py --headless-smoke 3
 ```
