@@ -3,10 +3,10 @@ set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-if "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 14) else 1)'; then
-  "$PYTHON_BIN" -m pip install pygame-ce
-else
-  "$PYTHON_BIN" -m pip install pygame
+# 1) Prefer pygame-ce wheels (works for Python 3.14+ and usually older versions too).
+# 2) Fallback to pygame only for older Python installs where pygame-ce wheel is unavailable.
+if ! "$PYTHON_BIN" -m pip install --only-binary=:all: pygame-ce; then
+  "$PYTHON_BIN" -m pip install --only-binary=:all: "pygame<2.7"
 fi
 
 "$PYTHON_BIN" main.py "$@"
