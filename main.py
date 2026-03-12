@@ -13,6 +13,7 @@ except ModuleNotFoundError as exc:
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
     if sys.version_info >= (3, 14):
         hint = (
+<<<<<<< 8fqa7b-codex/adapt-launch-for-multiple-platforms
             "Для Python 3.14 установите pygame-ce (wheel): \n"
             "  python -m pip install --only-binary=:all: pygame-ce"
         )
@@ -21,6 +22,13 @@ except ModuleNotFoundError as exc:
             "Установите pygame-ce (или pygame): \n"
             "  python -m pip install --only-binary=:all: pygame-ce"
         )
+=======
+            "Для Python 3.14 установите pygame-ce: \n"
+            "  python -m pip install pygame-ce"
+        )
+    else:
+        hint = "Установите pygame: \n  python -m pip install pygame"
+>>>>>>> main
     raise SystemExit(f"Не найден модуль pygame (Python {py_ver}).\n{hint}") from exc
 
 SCREEN_W, SCREEN_H = 1280, 720
