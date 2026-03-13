@@ -33,6 +33,10 @@ DELTA_ANGLE = FOV / RAYS
 SCALE = SCREEN_W // RAYS
 
 MOVE_SPEED = 0.012
+SPRINT_MULT = 1.65
+STAMINA_MAX = 100.0
+STAMINA_DRAIN = 0.10
+STAMINA_RECOVERY = 0.06
 ROT_SPEED = 0.03
 MOUSE_SENSITIVITY = 0.0015
 PLAYER_RADIUS = 0.2
@@ -78,6 +82,8 @@ class Game3D:
         self.keys_collected = 0
         self.win = False
         self.message = "WASD/стрелки — идти, E — терминал, мышь — обзор"
+        self.paused = False
+        self.stamina = STAMINA_MAX
 
         self.answer_mode = False
         self.answer_text = ""
@@ -102,6 +108,11 @@ class Game3D:
                 "Чёрный юмор: у оптимиста стакан наполовину полон, у пессимиста — наполовину пуст. "
                 "А у программиста он переполнен на сколько процентов?",
                 "200",
+            ),
+            (
+                "На чём чаще пишут игровую графику и шейдеры: Python, C++ или GLSL/HLSL? "
+                "Напиши коротко: c++, glsl или hlsl.",
+                "glsl",
             ),
             (
                 "Сложный шифр: если А=1, Б=2, ... Я=33, то чему равна сумма букв в слове 'КОД'?",
@@ -141,21 +152,35 @@ class Game3D:
                 pygame.quit()
                 sys.exit()
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                pygame.quit()
-                sys.exit()
+                if self.answer_mode:
+                    self.answer_mode = False
+                    self.answer_text = ""
+                    self.active_terminal = None
+                    self.message = "Ввод отменён"
+                else:
+                    self.paused = not self.paused
             if self.answer_mode and ev.type == pygame.KEYDOWN:
                 self._answer_input(ev)
+            elif self.paused and ev.type == pygame.KEYDOWN:
+                if ev.key in (pygame.K_RETURN, pygame.K_p):
+                    self.paused = False
+                elif ev.key in (pygame.K_q, pygame.K_F10):
+                    pygame.quit()
+                    sys.exit()
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_e:
                 self._try_interact()
 
-        if not self.answer_mode and not self.headless:
+        if not self.answer_mode and not self.paused and not self.headless:
             mx = pygame.mouse.get_rel()[0]
             self.player_a += mx * MOUSE_SENSITIVITY
 
     def _answer_input(self, ev: pygame.event.Event) -> None:
         if ev.key == pygame.K_RETURN and self.active_terminal:
             ans = self.answer_text.strip().lower()
-            if ans == self.active_terminal.answer:
+            valid_answers = {self.active_terminal.answer}
+            if self.active_terminal.answer == "glsl":
+                valid_answers = {"glsl", "hlsl", "c++"}
+            if ans in valid_answers:
                 if not self.active_terminal.solved:
                     self.active_terminal.solved = True
                     self.keys_collected += 1
@@ -176,7 +201,14 @@ class Game3D:
         sin_a = math.sin(self.player_a)
         cos_a = math.cos(self.player_a)
 
-        speed = MOVE_SPEED * dt
+        moving = keys[pygame.K_w] or keys[pygame.K_UP] or keys[pygame.K_s] or keys[pygame.K_DOWN] or keys[pygame.K_a] or keys[pygame.K_d]
+        sprinting = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) and self.stamina > 0 and moving
+        if sprinting:
+            speed = MOVE_SPEED * SPRINT_MULT * dt
+            self.stamina = max(0.0, self.stamina - dt * STAMINA_DRAIN)
+        else:
+            speed = MOVE_SPEED * dt
+            self.stamina = min(STAMINA_MAX, self.stamina + dt * STAMINA_RECOVERY)
         dx = dy = 0.0
 
         if keys[pygame.K_w] or keys[pygame.K_UP]:
@@ -265,11 +297,22 @@ class Game3D:
             t = y / HALF_H
             col = (int(8 + 30 * t), int(10 + 45 * t), int(30 + 90 * t))
             pygame.draw.line(self.screen, col, (0, y), (SCREEN_W, y))
+        for i in range(34):
+            sx = (i * 193) % SCREEN_W
+            sy = (i * 107) % (HALF_H - 10)
+            star = 140 + (i * 17) % 110
+            pygame.draw.circle(self.screen, (star, star, star), (sx, sy), 1)
 
         for y in range(HALF_H, SCREEN_H):
             t = (y - HALF_H) / HALF_H
             col = (int(20 + 25 * t), int(28 + 24 * t), int(38 + 22 * t))
             pygame.draw.line(self.screen, col, (0, y), (SCREEN_W, y))
+
+        horizon = HALF_H + 45
+        for i in range(1, 12):
+            yy = horizon + int(i * i * 1.6)
+            if yy < SCREEN_H:
+                pygame.draw.line(self.screen, (38, 46, 62), (0, yy), (SCREEN_W, yy), 1)
 
         pygame.draw.circle(self.screen, (230, 215, 150), (SCREEN_W - 170, 120), 42)
 
@@ -366,13 +409,61 @@ class Game3D:
         self._draw_sprites()
         self._draw_ui()
         self._draw_minimap()
+
+        vignette = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        pygame.draw.rect(vignette, (0, 0, 0, 0), (0, 0, SCREEN_W, SCREEN_H), border_radius=0)
+        pygame.draw.rect(vignette, (0, 0, 0, 58), (0, 0, SCREEN_W, SCREEN_H), 24)
+        self.screen.blit(vignette, (0, 0))
+
         pygame.display.flip()
+
+    def _draw_wrapped_text(
+        self,
+        text: str,
+        font: pygame.font.Font,
+        color: tuple[int, int, int],
+        x: int,
+        y: int,
+        max_w: int,
+        max_lines: int,
+    ) -> int:
+        words = text.split()
+        lines: list[str] = []
+        line = ""
+        for word in words:
+            test = (line + " " + word).strip()
+            if font.size(test)[0] <= max_w:
+                line = test
+            else:
+                lines.append(line)
+                line = word
+            if len(lines) >= max_lines:
+                break
+        if line and len(lines) < max_lines:
+            lines.append(line)
+
+        used_h = 0
+        for chunk in lines:
+            surf = font.render(chunk, True, color)
+            self.screen.blit(surf, (x, y + used_h))
+            used_h += surf.get_height() + 4
+        return used_h
 
     def _draw_ui(self) -> None:
         bar_h = 112
         pygame.draw.rect(self.screen, (8, 11, 20), (0, SCREEN_H - bar_h, SCREEN_W, bar_h))
         self.screen.blit(self.font.render(f"Ключи: {self.keys_collected}/3", True, (230, 236, 255)), (20, SCREEN_H - 98))
-        self.screen.blit(self.small.render(self.message[:100], True, (184, 196, 234)), (20, SCREEN_H - 58))
+        self._draw_wrapped_text(self.message, self.small, (184, 196, 234), 20, SCREEN_H - 58, 720, 2)
+
+        stamina_col = (110, 220, 255) if self.stamina > 25 else (255, 170, 90)
+        pygame.draw.rect(self.screen, (20, 30, 44), (20, SCREEN_H - 24, 220, 10), border_radius=5)
+        pygame.draw.rect(
+            self.screen,
+            stamina_col,
+            (20, SCREEN_H - 24, int(220 * (self.stamina / STAMINA_MAX)), 10),
+            border_radius=5,
+        )
+        self.screen.blit(self.small.render("Выносливость (Shift)", True, (160, 173, 210)), (248, SCREEN_H - 34))
 
         if self.answer_mode and self.active_terminal:
             overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
@@ -382,12 +473,31 @@ class Game3D:
             pygame.draw.rect(self.screen, (18, 26, 50), box, border_radius=14)
             pygame.draw.rect(self.screen, (122, 199, 255), box, 2, border_radius=14)
             self.screen.blit(self.font.render("Терминал безопасности", True, (240, 244, 255)), (box.x + 24, box.y + 24))
-            self.screen.blit(self.small.render(self.active_terminal.question[:100], True, (224, 231, 255)), (box.x + 24, box.y + 86))
+            self._draw_wrapped_text(
+                self.active_terminal.question,
+                self.small,
+                (224, 231, 255),
+                box.x + 24,
+                box.y + 86,
+                box.width - 48,
+                3,
+            )
             field = pygame.Rect(box.x + 24, box.y + 150, box.width - 48, 50)
             pygame.draw.rect(self.screen, (11, 17, 32), field, border_radius=8)
             pygame.draw.rect(self.screen, (122, 199, 255), field, 2, border_radius=8)
             self.screen.blit(self.small.render(self.answer_text, True, (240, 244, 255)), (field.x + 12, field.y + 14))
             self.screen.blit(self.small.render("Enter — подтвердить", True, (160, 173, 210)), (box.x + 24, box.y + 222))
+
+        if self.paused and not self.answer_mode:
+            overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 175))
+            self.screen.blit(overlay, (0, 0))
+            panel = pygame.Rect(SCREEN_W // 2 - 230, SCREEN_H // 2 - 130, 460, 260)
+            pygame.draw.rect(self.screen, (12, 18, 32), panel, border_radius=14)
+            pygame.draw.rect(self.screen, (122, 199, 255), panel, 2, border_radius=14)
+            self.screen.blit(self.font.render("ПАУЗА", True, (240, 245, 255)), (panel.x + 165, panel.y + 26))
+            self.screen.blit(self.small.render("Enter / P — продолжить", True, (200, 220, 255)), (panel.x + 92, panel.y + 104))
+            self.screen.blit(self.small.render("Q / F10 — выход", True, (200, 220, 255)), (panel.x + 128, panel.y + 144))
 
         if self.win:
             text = self.font.render("ПОБЕДА! Нажмите ESC для выхода.", True, (145, 242, 167))
