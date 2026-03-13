@@ -33,8 +33,14 @@ DELTA_ANGLE = FOV / RAYS
 SCALE = SCREEN_W // RAYS
 
 MOVE_SPEED = 0.012
+SPRINT_MULT = 1.65
+STAMINA_MAX = 100.0
+STAMINA_DRAIN = 0.10
+STAMINA_RECOVERY = 0.06
 ROT_SPEED = 0.03
-MOUSE_SENSITIVITY = 0.0015
+MOUSE_SENSITIVITY_X = 0.0015
+MOUSE_SENSITIVITY_Y = 0.20
+MAX_PITCH = 120
 PLAYER_RADIUS = 0.2
 
 WORLD_MAP = [
@@ -77,7 +83,16 @@ class Game3D:
 
         self.keys_collected = 0
         self.win = False
-        self.message = "WASD/стрелки — идти, E — терминал, мышь — обзор"
+        self.paused = False
+        self.stamina = STAMINA_MAX
+        self.camera_pitch = 0.0
+        self.scene_time = 0.0
+
+        self.story_intro = (
+            "Сюжет: ты проник на остров, чтобы угнать катер. Чтобы снять блокировку, "
+            "взломай 3 терминала с шуточными квестами."
+        )
+        self.message = self.story_intro
 
         self.answer_mode = False
         self.answer_text = ""
@@ -94,18 +109,19 @@ class Game3D:
     def _parse_level(self) -> None:
         qa = [
             (
-                "[18+] Ночной клуб закрылся в 02:00, бармен ушёл в 02:15. "
-                "Сколько минут бармен был сверхурочно?",
-                "15",
+                "Квест 1/3: Охранник просит пароль от Wi-Fi. Подсказка: "
+                "на табличке написано 'чай без сахара'. Введи: chai.",
+                "chai",
             ),
             (
-                "Чёрный юмор: у оптимиста стакан наполовину полон, у пессимиста — наполовину пуст. "
-                "А у программиста он переполнен на сколько процентов?",
-                "200",
+                "Квест 2/3: Бармен откажется мешать коктейль, если не назовёшь мем. "
+                "Введи классический ответ: eto baza.",
+                "eto baza",
             ),
             (
-                "Сложный шифр: если А=1, Б=2, ... Я=33, то чему равна сумма букв в слове 'КОД'?",
-                "27",
+                "Квест 3/3: Диджей отдаст ключ от катера только тому, кто знает язык шейдеров. "
+                "Введи один вариант: glsl, hlsl или c++.",
+                "glsl",
             ),
         ]
         idx = 0
@@ -126,8 +142,9 @@ class Game3D:
         frame = 0
         while True:
             dt = min(self.clock.tick(60), 33)
+            self.scene_time += dt * 0.001
             self._handle_events()
-            if not self.answer_mode and not self.win:
+            if not self.answer_mode and not self.win and not self.paused:
                 self._update_player(dt)
                 self._check_exit()
             self._draw_scene()
@@ -141,27 +158,42 @@ class Game3D:
                 pygame.quit()
                 sys.exit()
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                pygame.quit()
-                sys.exit()
+                if self.answer_mode:
+                    self.answer_mode = False
+                    self.answer_text = ""
+                    self.active_terminal = None
+                    self.message = "Ввод отменён"
+                else:
+                    self.paused = not self.paused
             if self.answer_mode and ev.type == pygame.KEYDOWN:
                 self._answer_input(ev)
+            elif self.paused and ev.type == pygame.KEYDOWN:
+                if ev.key in (pygame.K_RETURN, pygame.K_p):
+                    self.paused = False
+                elif ev.key in (pygame.K_q, pygame.K_F10):
+                    pygame.quit()
+                    sys.exit()
             elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_e:
                 self._try_interact()
 
-        if not self.answer_mode and not self.headless:
-            mx = pygame.mouse.get_rel()[0]
-            self.player_a += mx * MOUSE_SENSITIVITY
+        if not self.answer_mode and not self.paused and not self.headless:
+            mx, my = pygame.mouse.get_rel()
+            self.player_a += mx * MOUSE_SENSITIVITY_X
+            self.camera_pitch = max(-MAX_PITCH, min(MAX_PITCH, self.camera_pitch - my * MOUSE_SENSITIVITY_Y))
 
     def _answer_input(self, ev: pygame.event.Event) -> None:
         if ev.key == pygame.K_RETURN and self.active_terminal:
             ans = self.answer_text.strip().lower()
-            if ans == self.active_terminal.answer:
+            valid_answers = {self.active_terminal.answer}
+            if self.active_terminal.answer == "glsl":
+                valid_answers = {"glsl", "hlsl", "c++"}
+            if ans in valid_answers:
                 if not self.active_terminal.solved:
                     self.active_terminal.solved = True
                     self.keys_collected += 1
-                self.message = f"Доступ получен ({self.keys_collected}/3)"
+                self.message = f"Квест выполнен ({self.keys_collected}/3). Следуй к следующему терминалу."
             else:
-                self.message = "Неверный код терминала"
+                self.message = "Шутка не засчитана. Попробуй ещё раз"
             self.answer_mode = False
             self.answer_text = ""
             self.active_terminal = None
@@ -176,7 +208,14 @@ class Game3D:
         sin_a = math.sin(self.player_a)
         cos_a = math.cos(self.player_a)
 
-        speed = MOVE_SPEED * dt
+        moving = keys[pygame.K_w] or keys[pygame.K_UP] or keys[pygame.K_s] or keys[pygame.K_DOWN] or keys[pygame.K_a] or keys[pygame.K_d]
+        sprinting = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) and self.stamina > 0 and moving
+        if sprinting:
+            speed = MOVE_SPEED * SPRINT_MULT * dt
+            self.stamina = max(0.0, self.stamina - dt * STAMINA_DRAIN)
+        else:
+            speed = MOVE_SPEED * dt
+            self.stamina = min(STAMINA_MAX, self.stamina + dt * STAMINA_RECOVERY)
         dx = dy = 0.0
 
         if keys[pygame.K_w] or keys[pygame.K_UP]:
@@ -227,7 +266,7 @@ class Game3D:
         if math.dist((self.player_x, self.player_y), self.exit_pos) < 0.6:
             if self.keys_collected >= 3:
                 self.win = True
-                self.message = "Победа! Ты запустил катер и сбежал с острова."
+                self.message = "Победа! Все квесты закрыты, катер заведён, остров позади."
             else:
                 self.message = f"Выход заблокирован: {self.keys_collected}/3 ключей"
 
@@ -251,29 +290,56 @@ class Game3D:
                     wall_h = min(int(900 / max(corrected, 0.0001)), SCREEN_H)
 
                     tex = (hit_x - int(hit_x)) if abs(cos_a) > abs(sin_a) else (hit_y - int(hit_y))
-                    stripe = 35 * abs(math.sin(tex * math.pi * 5))
+                    stripe = 35 * abs(math.sin(tex * math.pi * 5 + self.scene_time * 3.0))
                     base = max(35, 240 - int(corrected * 24))
-                    color = (int(base * 0.38 + stripe), int(base * 0.45 + stripe), int(base * 0.62 + stripe))
+                    color = (int(base * 0.40 + stripe), int(base * 0.48 + stripe), int(base * 0.70 + stripe))
                     walls_to_draw.append((ray * SCALE, wall_h, int(corrected), color))
                 depth += 0.02
             if not hit:
                 walls_to_draw.append((ray * SCALE, 0, MAX_DEPTH, (0, 0, 0)))
         return walls_to_draw
 
-    def _draw_background(self) -> None:
-        for y in range(HALF_H):
-            t = y / HALF_H
-            col = (int(8 + 30 * t), int(10 + 45 * t), int(30 + 90 * t))
+    def _draw_background(self) -> int:
+        horizon = HALF_H + int(self.camera_pitch)
+        horizon = max(120, min(SCREEN_H - 120, horizon))
+
+        for y in range(0, horizon):
+            t = y / max(horizon, 1)
+            col = (int(6 + 24 * t), int(12 + 48 * t), int(34 + 110 * t))
             pygame.draw.line(self.screen, col, (0, y), (SCREEN_W, y))
 
-        for y in range(HALF_H, SCREEN_H):
-            t = (y - HALF_H) / HALF_H
-            col = (int(20 + 25 * t), int(28 + 24 * t), int(38 + 22 * t))
+        for i in range(40):
+            drift = int((self.scene_time * 12 + i * 31) % SCREEN_W)
+            sx = (i * 193 + drift) % SCREEN_W
+            sy = (i * 107) % max(40, horizon - 12)
+            star = 140 + (i * 17) % 110
+            pygame.draw.circle(self.screen, (star, star, star), (sx, sy), 1)
+
+        moon_x = SCREEN_W - 170 + int(math.sin(self.scene_time * 0.5) * 35)
+        moon_y = 120 + int(math.cos(self.scene_time * 0.35) * 9)
+        pygame.draw.circle(self.screen, (230, 215, 150), (moon_x, moon_y), 42)
+
+        cloud_wobble = int(math.sin(self.scene_time) * 8)
+        for i in range(4):
+            cx = int((self.scene_time * (30 + i * 8) + i * 290) % (SCREEN_W + 300) - 220)
+            cy = 84 + i * 30 + cloud_wobble
+            pygame.draw.ellipse(self.screen, (70, 84, 120), (cx, cy, 180, 38))
+
+        for y in range(horizon, SCREEN_H):
+            t = (y - horizon) / max(SCREEN_H - horizon, 1)
+            shimmer = int(10 * math.sin(self.scene_time * 2.0 + y * 0.03))
+            col = (int(18 + 30 * t), int(24 + 28 * t + shimmer), int(36 + 26 * t + shimmer))
             pygame.draw.line(self.screen, col, (0, y), (SCREEN_W, y))
 
-        pygame.draw.circle(self.screen, (230, 215, 150), (SCREEN_W - 170, 120), 42)
+        for i in range(1, 12):
+            yy = horizon + int(i * i * 1.6)
+            if yy < SCREEN_H:
+                pulse = int(10 * math.sin(self.scene_time * 2.2 + i))
+                pygame.draw.line(self.screen, (38 + pulse, 46 + pulse, 62 + pulse), (0, yy), (SCREEN_W, yy), 1)
 
-    def _draw_sprites(self) -> None:
+        return horizon
+
+    def _draw_sprites(self, center_y: int) -> None:
         objects: list[tuple[float, pygame.Rect, tuple[int, int, int]]] = []
 
         for t in self.terminals:
@@ -288,8 +354,9 @@ class Game3D:
             if abs(angle) < HALF_FOV + 0.25 and dist > 0.2:
                 proj = int(520 / dist)
                 sx = int((angle + HALF_FOV) / FOV * SCREEN_W)
-                rect = pygame.Rect(sx - proj // 4, HALF_H - proj // 2, proj // 2, proj)
-                color = (80, 220, 120) if t.solved else (184, 147, 255)
+                rect = pygame.Rect(sx - proj // 4, center_y - proj // 2, proj // 2, proj)
+                pulse = int(30 * (1 + math.sin(self.scene_time * 4 + dist)))
+                color = (80, min(255, 190 + pulse), 120) if t.solved else (184, 120 + pulse // 2, 255)
                 objects.append((dist, rect, color))
 
         dx = self.exit_pos[0] - self.player_x
@@ -303,8 +370,9 @@ class Game3D:
         if abs(angle) < HALF_FOV + 0.25 and dist > 0.2:
             proj = int(580 / dist)
             sx = int((angle + HALF_FOV) / FOV * SCREEN_W)
-            rect = pygame.Rect(sx - proj // 3, HALF_H - proj // 2, int(proj / 1.5), proj)
-            color = (100, 210, 120) if self.keys_collected >= 3 else (180, 80, 80)
+            rect = pygame.Rect(sx - proj // 3, center_y - proj // 2, int(proj / 1.5), proj)
+            pulse = int(25 * (1 + math.sin(self.scene_time * 3.0)))
+            color = (100, min(255, 180 + pulse), 120) if self.keys_collected >= 3 else (180 + pulse // 2, 80, 80)
             objects.append((dist, rect, color))
 
         for dist, rect, color in sorted(objects, key=lambda x: x[0], reverse=True):
@@ -314,9 +382,10 @@ class Game3D:
                 pygame.draw.rect(self.screen, (glow, glow, glow), rect, 1, border_radius=8)
 
     def _draw_minimap(self) -> None:
-        mm_w, mm_h = 210, 150
+        mm_w, mm_h = 240, 162
         mm_x, mm_y = SCREEN_W - mm_w - 16, SCREEN_H - mm_h - 16
-        pygame.draw.rect(self.screen, (10, 12, 22), (mm_x, mm_y, mm_w, mm_h), border_radius=10)
+        panel_col = (10, 12, 22 + int(8 * math.sin(self.scene_time * 3)))
+        pygame.draw.rect(self.screen, panel_col, (mm_x, mm_y, mm_w, mm_h), border_radius=10)
         pygame.draw.rect(self.screen, (90, 120, 170), (mm_x, mm_y, mm_w, mm_h), 1, border_radius=10)
 
         sx = (mm_w - 20) / self.map_w
@@ -348,12 +417,12 @@ class Game3D:
         )
 
     def _draw_scene(self) -> None:
-        self._draw_background()
+        center_y = self._draw_background()
 
         for x, wall_h, distance, color in self._ray_cast():
             if wall_h <= 0:
                 continue
-            top = HALF_H - wall_h // 2
+            top = center_y - wall_h // 2
             fog = max(0, min(120, distance * 8))
             shaded = (
                 max(0, color[0] - fog),
@@ -363,34 +432,108 @@ class Game3D:
             pygame.draw.rect(self.screen, shaded, (x, top, SCALE + 1, wall_h))
             pygame.draw.rect(self.screen, (20, 25, 35), (x, top, SCALE + 1, 1))
 
-        self._draw_sprites()
+        self._draw_sprites(center_y)
         self._draw_ui()
         self._draw_minimap()
+
+        vignette = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        pygame.draw.rect(vignette, (0, 0, 0, 0), (0, 0, SCREEN_W, SCREEN_H), border_radius=0)
+        pygame.draw.rect(vignette, (0, 0, 0, 58), (0, 0, SCREEN_W, SCREEN_H), 24)
+        self.screen.blit(vignette, (0, 0))
+
         pygame.display.flip()
 
+    def _draw_wrapped_text(
+        self,
+        text: str,
+        font: pygame.font.Font,
+        color: tuple[int, int, int],
+        x: int,
+        y: int,
+        max_w: int,
+        max_lines: int,
+    ) -> int:
+        words = text.split()
+        lines: list[str] = []
+        line = ""
+        for word in words:
+            test = (line + " " + word).strip()
+            if font.size(test)[0] <= max_w:
+                line = test
+            else:
+                lines.append(line)
+                line = word
+            if len(lines) >= max_lines:
+                break
+        if line and len(lines) < max_lines:
+            lines.append(line)
+
+        used_h = 0
+        for chunk in lines:
+            surf = font.render(chunk, True, color)
+            self.screen.blit(surf, (x, y + used_h))
+            used_h += surf.get_height() + 4
+        return used_h
+
     def _draw_ui(self) -> None:
-        bar_h = 112
+        bar_h = 116
         pygame.draw.rect(self.screen, (8, 11, 20), (0, SCREEN_H - bar_h, SCREEN_W, bar_h))
-        self.screen.blit(self.font.render(f"Ключи: {self.keys_collected}/3", True, (230, 236, 255)), (20, SCREEN_H - 98))
-        self.screen.blit(self.small.render(self.message[:100], True, (184, 196, 234)), (20, SCREEN_H - 58))
+        self.screen.blit(self.font.render(f"Ключи: {self.keys_collected}/3", True, (230, 236, 255)), (20, SCREEN_H - 102))
+        self._draw_wrapped_text(self.message, self.small, (184, 196, 234), 20, SCREEN_H - 66, 740, 2)
+
+        objective = "Цель: найти 3 терминала и открыть катер" if not self.win else "Цель выполнена: остров покинут"
+        self.screen.blit(self.small.render(objective, True, (164, 200, 255)), (20, SCREEN_H - 32))
+
+        stamina_col = (110, 220, 255) if self.stamina > 25 else (255, 170, 90)
+        pygame.draw.rect(self.screen, (20, 30, 44), (700, SCREEN_H - 26, 220, 10), border_radius=5)
+        pygame.draw.rect(
+            self.screen,
+            stamina_col,
+            (700, SCREEN_H - 26, int(220 * (self.stamina / STAMINA_MAX)), 10),
+            border_radius=5,
+        )
+        self.screen.blit(self.small.render("Выносливость (Shift)", True, (160, 173, 210)), (928, SCREEN_H - 37))
 
         if self.answer_mode and self.active_terminal:
             overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 165))
             self.screen.blit(overlay, (0, 0))
-            box = pygame.Rect(110, 176, 1060, 290)
+            box = pygame.Rect(96, 164, 1088, 316)
             pygame.draw.rect(self.screen, (18, 26, 50), box, border_radius=14)
             pygame.draw.rect(self.screen, (122, 199, 255), box, 2, border_radius=14)
-            self.screen.blit(self.font.render("Терминал безопасности", True, (240, 244, 255)), (box.x + 24, box.y + 24))
-            self.screen.blit(self.small.render(self.active_terminal.question[:100], True, (224, 231, 255)), (box.x + 24, box.y + 86))
-            field = pygame.Rect(box.x + 24, box.y + 150, box.width - 48, 50)
+            self.screen.blit(self.font.render("Терминал квестов", True, (240, 244, 255)), (box.x + 24, box.y + 22))
+            self._draw_wrapped_text(
+                self.active_terminal.question,
+                self.small,
+                (224, 231, 255),
+                box.x + 24,
+                box.y + 78,
+                box.width - 48,
+                5,
+            )
+            field = pygame.Rect(box.x + 24, box.y + 204, box.width - 48, 52)
             pygame.draw.rect(self.screen, (11, 17, 32), field, border_radius=8)
             pygame.draw.rect(self.screen, (122, 199, 255), field, 2, border_radius=8)
             self.screen.blit(self.small.render(self.answer_text, True, (240, 244, 255)), (field.x + 12, field.y + 14))
-            self.screen.blit(self.small.render("Enter — подтвердить", True, (160, 173, 210)), (box.x + 24, box.y + 222))
+            self.screen.blit(
+                self.small.render("Enter — подтвердить, Esc — отменить", True, (160, 173, 210)),
+                (box.x + 24, box.y + 270),
+            )
+
+        if self.paused and not self.answer_mode:
+            overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 175))
+            self.screen.blit(overlay, (0, 0))
+            panel = pygame.Rect(SCREEN_W // 2 - 230, SCREEN_H // 2 - 130, 460, 260)
+            pygame.draw.rect(self.screen, (12, 18, 32), panel, border_radius=14)
+            pygame.draw.rect(self.screen, (122, 199, 255), panel, 2, border_radius=14)
+            self.screen.blit(self.font.render("ПАУЗА", True, (240, 245, 255)), (panel.x + 165, panel.y + 26))
+            self.screen.blit(self.small.render("Enter / P — продолжить", True, (200, 220, 255)), (panel.x + 92, panel.y + 104))
+            self.screen.blit(self.small.render("Q / F10 — выход", True, (200, 220, 255)), (panel.x + 128, panel.y + 144))
+            self.screen.blit(self.small.render("Мышь X/Y — обзор", True, (200, 220, 255)), (panel.x + 132, panel.y + 184))
 
         if self.win:
-            text = self.font.render("ПОБЕДА! Нажмите ESC для выхода.", True, (145, 242, 167))
+            text = self.font.render("ПОБЕДА! Нажмите ESC для паузы/выхода", True, (145, 242, 167))
             self.screen.blit(text, (SCREEN_W // 2 - text.get_width() // 2, 24))
 
 
