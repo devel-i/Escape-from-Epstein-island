@@ -1,15 +1,16 @@
 @echo off
 setlocal
 
-set PYTHON_BIN=%PYTHON_BIN%
-if "%PYTHON_BIN%"=="" set PYTHON_BIN=py
+if "%BUILD_DIR%"=="" set BUILD_DIR=build
 
-REM 1) Prefer pygame-ce wheel (required/recommended for Python 3.14+).
-REM 2) Fallback to pygame wheel for older environments.
-%PYTHON_BIN% -m pip install --only-binary=:all: pygame-ce
-if errorlevel 1 (
-    %PYTHON_BIN% -m pip install --only-binary=:all: "pygame<2.7"
-)
+cmake -S . -B %BUILD_DIR%
 if errorlevel 1 exit /b %errorlevel%
 
-%PYTHON_BIN% main.py %*
+cmake --build %BUILD_DIR% --config Release
+if errorlevel 1 exit /b %errorlevel%
+
+if exist %BUILD_DIR%\Release\escape_island.exe (
+  %BUILD_DIR%\Release\escape_island.exe %*
+) else (
+  %BUILD_DIR%\escape_island.exe %*
+)
