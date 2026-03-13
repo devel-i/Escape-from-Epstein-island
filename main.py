@@ -307,6 +307,11 @@ class Game3D:
             t = y / max(horizon, 1)
             col = (int(6 + 24 * t), int(12 + 48 * t), int(34 + 110 * t))
             pygame.draw.line(self.screen, col, (0, y), (SCREEN_W, y))
+        for i in range(34):
+            sx = (i * 193) % SCREEN_W
+            sy = (i * 107) % (HALF_H - 10)
+            star = 140 + (i * 17) % 110
+            pygame.draw.circle(self.screen, (star, star, star), (sx, sy), 1)
 
         for i in range(40):
             drift = int((self.scene_time * 12 + i * 31) % SCREEN_W)
@@ -531,6 +536,17 @@ class Game3D:
             self.screen.blit(self.small.render("Enter / P — продолжить", True, (200, 220, 255)), (panel.x + 92, panel.y + 104))
             self.screen.blit(self.small.render("Q / F10 — выход", True, (200, 220, 255)), (panel.x + 128, panel.y + 144))
             self.screen.blit(self.small.render("Мышь X/Y — обзор", True, (200, 220, 255)), (panel.x + 132, panel.y + 184))
+
+        if self.paused and not self.answer_mode:
+            overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 175))
+            self.screen.blit(overlay, (0, 0))
+            panel = pygame.Rect(SCREEN_W // 2 - 230, SCREEN_H // 2 - 130, 460, 260)
+            pygame.draw.rect(self.screen, (12, 18, 32), panel, border_radius=14)
+            pygame.draw.rect(self.screen, (122, 199, 255), panel, 2, border_radius=14)
+            self.screen.blit(self.font.render("ПАУЗА", True, (240, 245, 255)), (panel.x + 165, panel.y + 26))
+            self.screen.blit(self.small.render("Enter / P — продолжить", True, (200, 220, 255)), (panel.x + 92, panel.y + 104))
+            self.screen.blit(self.small.render("Q / F10 — выход", True, (200, 220, 255)), (panel.x + 128, panel.y + 144))
 
         if self.win:
             text = self.font.render("ПОБЕДА! Нажмите ESC для паузы/выхода", True, (145, 242, 167))
